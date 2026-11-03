@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>时间规划</title>
+<link rel="icon" href="/assets/favicon.ico" sizes="any">
+<link rel="icon" type="image/png" sizes="192x192" href="/assets/icon-192.png">
+<link rel="apple-touch-icon" href="/assets/icon-192.png">
+<meta name="theme-color" content="#08090c">
+<!-- 无任何外部依赖：仅本地样式与脚本，可完全离线运行 -->
+<!-- 改样式时把下面的 v= 数字 +1，浏览器就不会拿旧缓存渲染新页面 -->
+<link rel="stylesheet" href="/assets/app.css?v=11">
+<script src="/assets/app.js?v=11" defer></script>
+<script>
+/* 风格控制：暗场玻璃 / 瑞士网格 / 暖色海报
+   右上角只有一个按钮，点一下轮到下一种风格。
+   这一段放在 <head> 里同步执行，为的是在首次绘制前就把 data-theme 定下来，
+   否则页面会先按默认风格画一帧再跳成另一种，闪一下。 */
+(function () {
+  var KEY = 'planner-theme';
+  var THEMES = ['glass', 'swiss', 'poster'];
+  var NAMES = { glass: '暗场玻璃', swiss: '瑞士网格', poster: '暖色海报' };
+  var root = document.documentElement;
+
+  // 三个图标分别画「玻璃球 / 网格 / 叠印方块」
+  var ICONS = {
+    glass: '<svg viewBox="0 0 18 18" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="9" cy="9" r="6.3"/><path d="M9 2.7a6.3 6.3 0 0 1 0 12.6z" fill="currentColor" stroke="none"/></svg>',
+    swiss: '<svg viewBox="0 0 18 18" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3.2 3.2h11.6v11.6H3.2z"/><path d="M9 3.2v11.6M3.2 9h11.6" stroke-width="1.1"/></svg>',
+    poster: '<svg viewBox="0 0 18 18" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3.4 3.4h8.2v11.2H3.4z"/><path d="M7.6 7.6h7v7h-7z" fill="currentColor" opacity=".85"/></svg>'
+  };
+
+  // 兼容旧值：以前的 dark / light 都归到默认的玻璃
+  function normalize(v) {
+    if (v === 'dark' || v === 'light') return 'glass';
+    return THEMES.indexOf(v) >= 0 ? v : 'glass';
+  }
+
+  function next(theme) {
+    return THEMES[(THEMES.indexOf(theme) + 1) % THEMES.length];
+  }
+
+  function syncButton(theme) {
+    var btn = document.getElementById('theme-toggle');
+    if (!btn) return;
+    btn.innerHTML = ICONS[theme];
+    var label = '当前：' + NAMES[theme] + '　→　点击切换到「' + NAMES[next(theme)] + '」';
+    btn.setAttribute('title', label);
+    btn.setAttribute('aria-label', '切换界面风格，' + label);
+  }
+
+  function apply(mode) {
+    var theme = normalize(mode);
+    root.setAttribute('data-theme', theme);
+    syncButton(theme);
+    return theme;
+  }
+
+  // URL 上的 ?theme= 优先（方便分享链接和截图），其次看本地偏好
+  var forced = '';
+  try { forced = new URLSearchParams(location.search).get('theme') || ''; } catch (e) { /* 忽略 */ }
+
+  if (forced) {
+    apply(forced);
+    try { localStorage.setItem(KEY, normalize(forced)); } catch (e) {}
+  } else {
+    var saved = 'glass';
+    try { saved = localStorage.getItem(KEY) || 'glass'; } catch (e) { /* 无痕模式 */ }
+    apply(saved);
+  }
+
+  // 首帧时按钮还没解析出来，DOM 就绪后再补一次图标
+  document.addEventListener('DOMContentLoaded', function () {
+    syncButton(normalize(root.getAttribute('data-theme')));
+  });
+
+  // 事件委托：不依赖按钮的加载时序
+  document.addEventListener('click', function (ev) {
+    var btn = ev.target && ev.target.closest ? ev.target.closest('#theme-toggle') : null;
+    if (!btn) return;
+    var theme = apply(next(normalize(root.getAttribute('data-theme'))));
+    // 换主题后让卡片重新跑一次入场，视觉上更像「换了一张纸」而不是瞬间跳变
+    root.classList.remove('theme-swapped');
+    void root.offsetWidth;
+    root.classList.add('theme-swapped');
+    try { localStorage.setItem(KEY, theme); } catch (e) {}
+  });
+})();
+</script>
+</head>
+<body>
+
+<!-- ===================== 顶部导航 ===================== -->
+<header class="topbar">
+  <div class="masthead">
+    <div class="brand">
+      <span class="led" aria-hidden="true"></span>
+      <div class="brand-text">
+        <strong>时间规划</strong>
+        <small>AI TIME PLANNER</small>
+      </div>
+    </div>
+    <nav class="nav" id="nav" aria-label="主导航">
+      <button type="button" class="nav-btn is-active" data-view="today">今日计划</button>
+      <button type="button" class="nav-btn" data-view="generate">智能生成</button>
+      <button type="button" class="nav-btn" data-view="pool">未完成池<span class="nav-dot" id="nav-pool-dot" hidden></span></button>
+      <button type="button" class="nav-btn" data-view="recurring">周期任务</button>
+      <button type="button" class="nav-btn" data-view="goals">长期目标</button>
+      <button type="button" class="nav-btn" data-view="stats">统计</button>
+      <button type="button" class="nav-btn" data-view="settings">设置</button>
+    </nav>
+    <button type="button" class="theme-toggle" id="theme-toggle" title="切换界面风格" aria-label="切换界面风格"></button>
+  </div>
+</header>
+
+<main class="app">
+
+  <!-- ===================== 1. 今日计划 ===================== -->
+  <section class="view is-active" id="view-today">
+
+    <!-- 首屏：日期抬头 + 一句话概括 + 右侧一枚会走的进度环 -->
+    <div class="hero" id="today-hero">
+      <div class="hero-main">
+        <p class="hero-greet" id="hero-greet">你好</p>
+        <h1 class="hero-title" id="hero-title">正在载入今天的安排…</h1>
+        <p class="hero-sub" id="hero-sub"></p>
+        <div class="hero-actions" id="hero-actions"></div>
+      </div>
+
+      <!-- 进度环：一块玻璃上的细弧。
+           弧的读数由 --pct 驱动（见 app.js 的 updateHeroRing），
+           光晕、内圈刻度、外圈高光全部是 CSS，没有图片。 -->
+      <div class="hero-ring" aria-hidden="true">
+        <div class="ring">
+          <span class="ring-halo"></span>
+          <span class="ring-arc" id="hero-arc"></span>
+          <span class="ring-ticks"></span>
+          <span class="ring-core">
+            <strong id="hero-ring-pct">0%</strong>
+            <em>今日完成</em>
+          </span>
+        </div>
+      </div>
+    </div>
+
+    <div class="card clock-card">
+      <div class="clock-left">
+        <span class="clock-label">当前北京时间</span>
+        <span class="clock-time" id="live-clock">--:--:--</span>
+        <span class="clock-date" id="live-date">载入中…</span>
+      </div>
+      <div class="clock-right" id="today-glance">
+        <div class="glance-item"><span class="glance-label">截止时间</span><strong id="glance-deadline">--</strong></div>
+        <div class="glance-item"><span class="glance-label">可用时长</span><strong id="glance-available">--</strong></div>
+        <div class="glance-item"><span class="glance-label">待办需求</span><strong id="glance-demand">--</strong></div>
+        <div class="glance-item"><span class="glance-label">负载</span><strong id="glance-ratio">--</strong></div>
+      </div>
+    </div>
+
+    <!-- 预警与提示区（负载过高、超时未结束、AI 建议等） -->
+    <div id="today-alerts" class="stack"></div>
+
+    <!-- 数据概览 -->
+    <div class="stat-grid" id="today-stats"></div>
+
+    <div class="card card-plain">
+      <div class="card-head">
+        <h2>任务时间线</h2>
+        <div class="card-actions">
+          <button type="button" class="btn btn-primary" id="btn-add-task">＋ 添加任务</button>
+          <button type="button" class="btn" id="btn-align">一键对齐北京时间</button>
+          <button type="button" class="btn" id="btn-float-timer" title="开一个始终置顶的小窗，工作时压在其它窗口上面也能看到已耗时">悬浮计时窗</button>
+        </div>
+      </div>
+      <p class="hint">「一键对齐」会按当前时间重新排列并刷新所有时间戳；拖动卡片仅调整显示顺序，不会改动时间。</p>
+      <ul class="task-list" id="task-list">
+        <!-- 首帧占位：等 /api/dashboard 回来的这段时间不要留一片空白 -->
+        <li class="skeleton-row" aria-hidden="true"></li>
+        <li class="skeleton-row" aria-hidden="true"></li>
+        <li class="skeleton-row" aria-hidden="true"></li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- ===================== 2. 智能生成 ===================== -->
+  <section class="view" id="view-generate">
+    <div class="card">
+      <div class="card-head"><h2>让 AI 帮你排一份今天的计划</h2></div>
+      <label class="field">
+        <span class="field-label">今天要做的事（自然语言描述即可）</span>
+        <textarea id="gen-input" rows="5" placeholder="例如：今天要复习高数第三章、写物理实验报告、晚上跑步 30 分钟，中间想休息几次"></textarea>
+      </label>
+      <label class="field">
+        <span class="field-label">本次临时约束 <em>（仅本次生成生效，不会长期保存）</em></span>
+        <input type="text" id="gen-constraint" placeholder="例如：上午不要安排任务 / 下午 3 点后才有空">
+      </label>
+      <label class="check">
+        <input type="checkbox" id="gen-replace" checked>
+        <span>重新生成时清除今天由 AI 生成且未开始的任务</span>
+      </label>
+      <div class="row">
+        <button type="button" class="btn btn-primary" id="btn-generate">生成计划</button>
+        <span class="hint" id="gen-status"></span>
+      </div>
+    </div>
+    <div class="stack" id="gen-result"></div>
+  </section>
+
+  <!-- ===================== 3. 未完成任务池 ===================== -->
+  <section class="view" id="view-pool">
+    <div class="card">
+      <div class="card-head">
+        <h2>未完成任务池</h2>
+        <div class="card-actions">
+          <button type="button" class="btn" id="btn-pool-refresh">刷新</button>
+        </div>
+      </div>
+      <p class="hint">这里汇集了今天之前所有标记为「未完成」的任务，可以一键承接进今天的计划。</p>
+      <div class="stack" id="pool-list"></div>
+    </div>
+  </section>
+
+  <!-- ===================== 4. 周期任务 ===================== -->
+  <section class="view" id="view-recurring">
+    <div class="card">
+      <div class="card-head"><h2 id="rec-form-title">新增周期任务</h2></div>
+      <div class="form-grid">
+        <label class="field">
+          <span class="field-label">任务内容</span>
+          <input type="text" id="rec-name" placeholder="例如：晨跑 / 背单词">
+        </label>
+        <label class="field">
+          <span class="field-label">标签</span>
+          <select id="rec-tag"></select>
+        </label>
+        <label class="field">
+          <span class="field-label">单次时长（分钟）</span>
+          <input type="number" id="rec-duration" min="0" max="1440" step="5" value="30">
+        </label>
+        <label class="field">
+          <span class="field-label">周期频率</span>
+          <select id="rec-freq">
+            <option value="daily">每天</option>
+            <option value="every2days">每 2 天</option>
+            <option value="every3days">每 3 天</option>
+            <option value="weekly">按星期</option>
+          </select>
+        </label>
+        <label class="field">
+          <span class="field-label">生效日期</span>
+          <input type="date" id="rec-from">
+        </label>
+        <label class="field">
+          <span class="field-label">结束日期 <em>（留空 = 无限期）</em></span>
+          <input type="date" id="rec-to">
+        </label>
+      </div>
+      <div class="field" id="rec-weekdays-field" hidden>
+        <span class="field-label">星期（0 = 周日 … 6 = 周六，可多选）</span>
+        <div class="weekday-picker" id="rec-weekdays">
+          <label><input type="checkbox" value="1"><span>周一</span></label>
+          <label><input type="checkbox" value="2"><span>周二</span></label>
+          <label><input type="checkbox" value="3"><span>周三</span></label>
+          <label><input type="checkbox" value="4"><span>周四</span></label>
+          <label><input type="checkbox" value="5"><span>周五</span></label>
+          <label><input type="checkbox" value="6"><span>周六</span></label>
+          <label><input type="checkbox" value="0"><span>周日</span></label>
+        </div>
+      </div>
+      <label class="check">
+        <input type="checkbox" id="rec-enabled" checked>
+        <span>启用该周期任务</span>
+      </label>
+      <div class="row">
+        <button type="button" class="btn btn-primary" id="btn-rec-save">保存</button>
+        <button type="button" class="btn" id="btn-rec-cancel" hidden>取消编辑</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h2>已配置的周期任务</h2></div>
+      <p class="hint">每次打开页面都会自动把当天应执行的周期任务排进计划，重复执行不会产生重复任务。</p>
+      <div class="stack" id="rec-list"></div>
+    </div>
+  </section>
+
+  <!-- ===================== 5. 长期目标 ===================== -->
+  <section class="view" id="view-goals">
+    <div class="card">
+      <div class="card-head"><h2 id="goal-form-title">新增长期目标</h2></div>
+      <div class="form-grid">
+        <label class="field">
+          <span class="field-label">目标内容</span>
+          <input type="text" id="goal-content" placeholder="例如：通过 6 月六级考试">
+        </label>
+        <label class="field">
+          <span class="field-label">绑定标签 <em>（用该标签的累计时长衡量投入）</em></span>
+          <select id="goal-tag"></select>
+        </label>
+      </div>
+      <div class="row">
+        <button type="button" class="btn btn-primary" id="btn-goal-save">保存</button>
+        <button type="button" class="btn" id="btn-goal-cancel" hidden>取消编辑</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h2>目标投入进度</h2></div>
+      <p class="hint">累计时长来自永久保留的标签日统计，不受 21 天明细清理影响。</p>
+      <div class="stack" id="goal-list"></div>
+    </div>
+  </section>
+
+  <!-- ===================== 6. 统计 ===================== -->
+  <section class="view" id="view-stats">
+    <div class="card">
+      <div class="card-head">
+        <h2>最近 21 天投入趋势</h2>
+        <div class="card-actions">
+          <button type="button" class="btn" id="btn-stats-refresh">刷新</button>
+        </div>
+      </div>
+      <p class="hint">柱高表示当天的实际投入总时长，鼠标悬停或直接看标注即可读到日期与时长。</p>
+      <div class="chart-wrap" id="trend-chart"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h2>标签时长排行</h2></div>
+      <div class="chart-wrap" id="tag-chart"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <h2>AI 效率分析</h2>
+        <div class="card-actions">
+          <button type="button" class="btn btn-primary" id="btn-analyze">开始分析</button>
+        </div>
+      </div>
+      <p class="hint">AI 会对比「预估 / 实际」的偏差并给出改进建议；需要先在设置中配置 AI 接口。</p>
+      <div class="stack" id="analyze-result"></div>
+    </div>
+  </section>
+
+  <!-- ===================== 7. 设置 ===================== -->
+  <section class="view" id="view-settings">
+
+    <div class="card">
+      <div class="card-head"><h2>当日计划设置</h2></div>
+      <p class="hint" id="plan-cfg-hint"></p>
+      <div class="form-grid">
+        <label class="field">
+          <span class="field-label">当日截止时间</span>
+          <input type="time" id="cfg-deadline">
+        </label>
+        <label class="field">
+          <span class="field-label">休息间隔（分钟）</span>
+          <input type="number" id="cfg-break" min="0" max="120" step="5">
+        </label>
+      </div>
+      <div class="row"><button type="button" class="btn btn-primary" id="btn-save-plan-config">保存当日设置</button></div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h2 id="tb-form-title">新增时间块</h2></div>
+      <p class="hint">时间块决定「可用时长」的计算口径。若某星期有自己的时间块，则只使用该星期的，否则使用「每天通用」。暂不支持跨零点的时间块。</p>
+      <div class="form-grid">
+        <label class="field">
+          <span class="field-label">适用星期</span>
+          <select id="tb-weekday">
+            <option value="-1">每天通用</option>
+            <option value="1">周一</option>
+            <option value="2">周二</option>
+            <option value="3">周三</option>
+            <option value="4">周四</option>
+            <option value="5">周五</option>
+            <option value="6">周六</option>
+            <option value="0">周日</option>
+          </select>
+        </label>
+        <label class="field">
+          <span class="field-label">开始时间</span>
+          <input type="time" id="tb-start" value="09:00">
+        </label>
+        <label class="field">
+          <span class="field-label">结束时间</span>
+          <input type="time" id="tb-end" value="12:00">
+        </label>
+      </div>
+      <label class="check"><input type="checkbox" id="tb-enabled" checked><span>启用该时间块</span></label>
+      <div class="row">
+        <button type="button" class="btn btn-primary" id="btn-tb-save">保存</button>
+        <button type="button" class="btn" id="btn-tb-cancel" hidden>取消编辑</button>
+      </div>
+      <div class="stack" id="tb-list"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h2 id="tag-form-title">新增标签</h2></div>
+      <div class="form-grid">
+        <label class="field">
+          <span class="field-label">标签名称</span>
+          <input type="text" id="tag-name" placeholder="例如：学习 / 运动 / 工作">
+        </label>
+        <label class="field">
+          <span class="field-label">颜色</span>
+          <input type="color" id="tag-color" value="#3b82f6">
+        </label>
+      </div>
+      <div class="row">
+        <button type="button" class="btn btn-primary" id="btn-tag-save">保存</button>
+        <button type="button" class="btn" id="btn-tag-cancel" hidden>取消编辑</button>
+      </div>
+      <div class="stack" id="tag-list"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h2>AI 配置</h2></div>
+      <p class="hint">未配置时「智能生成」会自动降级为本地规则排程，功能依然可用。</p>
+      <div class="form-grid">
+        <label class="field">
+          <span class="field-label">接口地址</span>
+          <input type="text" id="ai-base-url" placeholder="https://api.example.com/v1">
+        </label>
+        <label class="field">
+          <span class="field-label">模型名称</span>
+          <input type="text" id="ai-model" placeholder="例如：deepseek-chat">
+        </label>
+        <label class="field">
+          <span class="field-label">API Key</span>
+          <input type="password" id="ai-key" placeholder="留空则不修改">
+        </label>
+      </div>
+      <p class="hint" id="ai-key-hint"></p>
+      <div class="row"><button type="button" class="btn btn-primary" id="btn-save-ai">保存 AI 配置</button></div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h2>系统默认值</h2></div>
+      <div class="form-grid">
+        <label class="field">
+          <span class="field-label">默认截止时间</span>
+          <input type="time" id="cfg-default-deadline">
+        </label>
+        <label class="field">
+          <span class="field-label">默认休息间隔（分钟）</span>
+          <input type="number" id="cfg-default-break" min="0" max="120" step="5">
+        </label>
+        <label class="field">
+          <span class="field-label">数据保留天数 <em>（明细，聚合统计永久保留）</em></span>
+          <input type="number" id="cfg-retention" min="1" max="3650">
+        </label>
+      </div>
+      <div class="row"><button type="button" class="btn btn-primary" id="btn-save-system">保存系统默认值</button></div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h2>数据管理</h2></div>
+      <div class="row row-wrap">
+        <button type="button" class="btn" id="btn-export-csv">导出今日 CSV</button>
+        <button type="button" class="btn" id="btn-export-backup">导出完整备份</button>
+        <button type="button" class="btn" id="btn-cleanup">立即清理过期数据</button>
+      </div>
+      <label class="field">
+        <span class="field-label">导入备份（zip）</span>
+        <input type="file" id="import-file" accept=".zip,application/zip">
+      </label>
+      <div class="row"><button type="button" class="btn" id="btn-import">上传并导入</button></div>
+
+      <div class="danger-zone">
+        <h3>危险操作</h3>
+        <p>清空全部业务数据（任务、标签、周期任务、长期目标与统计数据）。此操作不可撤销，导入备份前请谨慎。</p>
+        <div class="row"><button type="button" class="btn btn-danger" id="btn-clear-data">清空全部数据</button></div>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<!-- Toast 与自定义弹窗挂载点 -->
+<div class="toast-host" id="toast-host" aria-live="polite" aria-atomic="false"></div>
+<div class="modal-host" id="modal-host" hidden></div>
+
+</body>
+</html>
